@@ -5,7 +5,7 @@
     "id": {
       "group":   null,
       "name":    "viz-airspace-radar",
-      "version": "1.0.0"
+      "version": "1.0.2"
     },
     "author": [{ "name": "Will Searle", "email": "will@livehybrid.com", "company": "LiveHybrid" }],
     "releaseDate": null,
