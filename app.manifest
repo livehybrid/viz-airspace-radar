@@ -5,7 +5,7 @@
     "id": {
       "group":   null,
       "name":    "viz-airspace-radar",
-      "version": "1.0.3"
+      "version": "1.0.4"
     },
     "author": [{ "name": "Will Searle", "email": "will@livehybrid.com", "company": "LiveHybrid" }],
     "releaseDate": null,
@@ -17,8 +17,8 @@
     },
     "commonInformationModels": null,
     "license": { "name": "Apache-2.0" },
-    "privacyPolicy": { "externalLink": "" },
-    "releaseNotes": { "externalLink": "" }
+    "privacyPolicy": null,
+    "releaseNotes": null
   },
   "dependencies": {},
   "tasks": []
