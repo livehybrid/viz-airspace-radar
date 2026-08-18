@@ -4,3 +4,8 @@ dist/
 stage/
 *.tar.gz
 .DS_Store
+
+# Dev test tooling output (never committed)
+package-lock.json.bak
+e2e-results/
+test-results/
