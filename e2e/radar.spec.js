@@ -15,6 +15,11 @@ const MGMT_URL = process.env.SPLUNK_MGMT_URL || 'https://localhost:8089';
 const USER = process.env.SPLUNK_USER || 'admin';
 const PASS = process.env.SPLUNK_PASSWORD || 'Changeme1!';
 const APP = 'viz-airspace-radar';
+// The dashboard lives in Search & Reporting, as a user's would. The viz app is
+// is_visible = false, and Splunk 10.6 returns 404 for a view inside a hidden
+// app (10.4 served it), so hosting the test dashboard there tested a
+// placement no user has. The viz is exported system-wide in default.meta.
+const HOST_APP = 'search';
 const VIEW = 'radar_e2e';
 
 // Three synthetic aircraft within 50 nm of the default centre (53.8, -1.55).
@@ -66,12 +71,12 @@ test.beforeAll(async () => {
         httpCredentials: { username: USER, password: PASS },
     });
     // Create, or update if a previous run left it behind.
-    const create = await api.post(`/servicesNS/${USER}/${APP}/data/ui/views?output_mode=json`, {
+    const create = await api.post(`/servicesNS/${USER}/${HOST_APP}/data/ui/views?output_mode=json`, {
         form: { name: VIEW, 'eai:data': DASHBOARD_XML },
     });
     if (!create.ok()) {
         const update = await api.post(
-            `/servicesNS/${USER}/${APP}/data/ui/views/${VIEW}?output_mode=json`,
+            `/servicesNS/${USER}/${HOST_APP}/data/ui/views/${VIEW}?output_mode=json`,
             { form: { 'eai:data': DASHBOARD_XML } }
         );
         if (!update.ok()) {
@@ -139,7 +144,7 @@ test('Airspace Radar renders and animates on a Studio dashboard', async ({ page 
     await page.waitForURL(/\/(app|launcher|home)/, { timeout: 60000 });
 
     // Open the dashboard and wait for the viz canvas (in any frame)
-    await page.goto(`/en-GB/app/${APP}/${VIEW}`);
+    await page.goto(`/en-GB/app/${HOST_APP}/${VIEW}`);
     const found = await findCanvas(page, 120000);
     if (!found) {
         console.log('--- console messages (last 50) ---');
