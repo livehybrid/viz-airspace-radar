@@ -172,6 +172,7 @@ test('aircraft are plotted at their true bearing and range', async ({ page }) =>
     const { ring, blips } = geometry(fr);
     expect(blips).toHaveLength(2);
     const half = ring.r * 25 / 50;
+    console.log('geometry', JSON.stringify({ ring, blips, w: fr.w, h: fr.h, texts: fr.texts.filter((t) => /25|nm/.test(t.t)) }));
     const north = blips.find((b) => b.y < ring.y - half / 2);
     const east = blips.find((b) => b.x > ring.x + half / 2);
     expect(north && Math.abs(north.x - ring.x)).toBeLessThan(3);
