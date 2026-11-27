@@ -7,6 +7,14 @@ search returning `hex, callsign, lat, lon, altitude_ft, heading, speed_kts`.
 Pairs with [TA-airspace-watch](https://github.com/livehybrid/TA-airspace-watch)
 (the ADS-B modular input) and the AirspaceWatch dashboards.
 
+Rows whose `lat`/`lon` are missing or not numbers are skipped; when no row
+has a usable position the scope says `NO POSITION DATA (lat/lon)`. Bound
+searches that return zero rows never reach the viz: Dashboard Studio shows its
+own no-results placeholder instead. Options with the wrong type or out of range
+(for example `showLabels: "false"` as a string, or a centre latitude beyond
+85 degrees) fall back to their defaults. Aircraft across the antimeridian from
+the centre are plotted the short way round.
+
 ## Build / release
 CI (`.github/workflows/splunk-app-ci.yml`) stages the app, runs the test
 suites and AppInspect (cloud/future/private_victoria), and publishes a

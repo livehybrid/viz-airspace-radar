@@ -80,7 +80,21 @@
 
     function num(v) {
         var n = parseFloat(v);
-        return isNaN(n) ? null : n;
+        return isFinite(n) ? n : null;
+    }
+
+    /* Option booleans: Studio passes dashboard JSON through untyped, so the
+     * string "false" must not count as true. Anything else is the default. */
+    function bool(v, dflt) {
+        if (v === true || v === 'true') return true;
+        if (v === false || v === 'false') return false;
+        return dflt;
+    }
+
+    /* A number option inside [lo, hi], else the default. */
+    function inRange(v, lo, hi, dflt) {
+        var n = num(v);
+        return (n === null || n < lo || n > hi) ? dflt : n;
     }
 
     /* Extract all rows from the Studio-shaped primary data source. */
@@ -114,7 +128,10 @@
     function project(lat, lon, cLat, cLon, rangeNm) {
         var nmPerDegLon = NM_PER_DEG_LAT * Math.cos(cLat * Math.PI / 180);
         var dLatNm = (lat - cLat) * NM_PER_DEG_LAT;
-        var dLonNm = (lon - cLon) * nmPerDegLon;
+        /* Shortest way round: an aircraft at -179.9 is 0.2 deg east of a
+         * centre at 179.9, not 359.8 deg west of it. */
+        var dLon = ((((lon - cLon) % 360) + 540) % 360) - 180;
+        var dLonNm = dLon * nmPerDegLon;
         var distNm = Math.sqrt(dLatNm * dLatNm + dLonNm * dLonNm);
         if (distNm > rangeNm * 1.02) return null;
         var brg = Math.atan2(dLonNm, dLatNm); // atan2(east, north) = bearing from north
@@ -134,7 +151,7 @@
             var r = rows[i];
             var lat = num(r.lat);
             var lon = num(r.lon);
-            if (lat === null || lon === null) continue;
+            if (lat === null || lon === null || Math.abs(lat) > 90 || Math.abs(lon) > 180) continue;
             var p = project(lat, lon, cLat, cLon, rangeNm);
             if (!p) continue;
             out.push({
@@ -149,6 +166,17 @@
         return out;
     }
 
+    /* True when at least one row has a usable lat/lon pair, so an empty
+     * scope means "all out of range" rather than "wrong fields". */
+    function hasPosition(rows) {
+        for (var i = 0; i < rows.length; i++) {
+            var lat = num(rows[i].lat);
+            var lon = num(rows[i].lon);
+            if (lat !== null && lon !== null && Math.abs(lat) <= 90 && Math.abs(lon) <= 180) return true;
+        }
+        return false;
+    }
+
     /* ---- Canvas drawing ---- */
 
     /*
@@ -156,7 +184,7 @@
      * sweepBrg  bearing of sweep arm tip in radians (0=N, CW).
      * litMap    {id -> timestamp_ms} — when each blip was last hit by the sweep.
      */
-    function drawFrame(ctx, W, H, aircraft, opts, palette, litMap, sweepBrg) {
+    function drawFrame(ctx, W, H, aircraft, opts, palette, litMap, sweepBrg, status) {
         var cx = W / 2;
         var cy = H / 2;
         var radius = Math.min(W, H) / 2 * 0.87;
@@ -247,6 +275,15 @@
             ctx.textAlign   = 'left';
             ctx.textBaseline = 'middle';
             ctx.fillText(opts.homeLabel, cx + 12, cy);
+        }
+
+        /* Why the scope is empty, when it is not just quiet airspace */
+        if (status) {
+            ctx.fillStyle    = palette.label;
+            ctx.font         = 'bold 11px monospace';
+            ctx.textAlign    = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(status, cx, cy + radius * 0.5);
         }
 
         /* Aircraft blips */
@@ -346,26 +383,26 @@
         function resolveOpts() {
             var raw = state.options || {};
             var o   = raw.options || raw;
-            var cLat   = num(o.centerLat);   if (cLat   === null)        cLat   = DEFAULTS.centerLat;
-            var cLon   = num(o.centerLon);   if (cLon   === null)        cLon   = DEFAULTS.centerLon;
-            var range  = num(o.rangeNm);     if (range  === null || range  < 1) range  = DEFAULTS.rangeNm;
-            var sweep  = num(o.sweepSeconds);if (sweep  === null || sweep  < 0.5) sweep = DEFAULTS.sweepSeconds;
+            /* Out-of-range or wrong-type values fall back to the defaults: a
+             * centre latitude past the pole made cos() negative and mirrored
+             * the scope east-west. Polar centres (|lat| > 85) are refused too:
+             * the flat projection collapses there. */
             return {
-                centerLat:         cLat,
-                centerLon:         cLon,
-                rangeNm:           range,
-                sweepSeconds:      sweep,
-                showLabels:        o.showLabels        !== undefined ? !!o.showLabels        : DEFAULTS.showLabels,
-                showAltitude:      o.showAltitude      !== undefined ? !!o.showAltitude      : DEFAULTS.showAltitude,
-                showHeadingVector: o.showHeadingVector !== undefined ? !!o.showHeadingVector : DEFAULTS.showHeadingVector,
-                colorScheme:       o.colorScheme       || DEFAULTS.colorScheme,
-                homeLabel:         o.homeLabel         !== undefined ? o.homeLabel           : DEFAULTS.homeLabel,
+                centerLat:         inRange(o.centerLat, -85, 85, DEFAULTS.centerLat),
+                centerLon:         inRange(o.centerLon, -180, 180, DEFAULTS.centerLon),
+                rangeNm:           inRange(o.rangeNm, 1, 5000, DEFAULTS.rangeNm),
+                sweepSeconds:      inRange(o.sweepSeconds, 0.5, 3600, DEFAULTS.sweepSeconds),
+                showLabels:        bool(o.showLabels, DEFAULTS.showLabels),
+                showAltitude:      bool(o.showAltitude, DEFAULTS.showAltitude),
+                showHeadingVector: bool(o.showHeadingVector, DEFAULTS.showHeadingVector),
+                colorScheme:       Object.prototype.hasOwnProperty.call(PALETTES, o.colorScheme) ? o.colorScheme : DEFAULTS.colorScheme,
+                homeLabel:         typeof o.homeLabel === 'string' || typeof o.homeLabel === 'number' ? String(o.homeLabel) : DEFAULTS.homeLabel,
             };
         }
 
         function frame() {
             var opts    = resolveOpts();
-            var palette = PALETTES[opts.colorScheme] || PALETTES.green;
+            var palette = PALETTES[opts.colorScheme];
 
             root.style.background = palette.bg;
 
@@ -395,6 +432,10 @@
             /* Build aircraft list for this frame */
             var rows     = parseRows(state.dataSources);
             var aircraft = buildAircraft(rows, opts.centerLat, opts.centerLon, opts.rangeNm);
+            /* Rows arrived but none has a usable position: say why the scope is
+             * empty. (Zero rows never reach the viz: Studio shows its own
+             * no-results placeholder instead of mounting it.) */
+            var status = (rows.length > 0 && !hasPosition(rows)) ? 'NO POSITION DATA (lat/lon)' : '';
 
             /* Detect which blips the sweep passed since the last frame */
             var wrapped = brg < prevBrg;
@@ -413,7 +454,7 @@
             }
 
             var ctx = canvas.getContext('2d');
-            if (ctx) drawFrame(ctx, cssW, cssH, aircraft, opts, palette, litMap, brg);
+            if (ctx) drawFrame(ctx, cssW, cssH, aircraft, opts, palette, litMap, brg, status);
 
             requestAnimationFrame(frame);
         }
