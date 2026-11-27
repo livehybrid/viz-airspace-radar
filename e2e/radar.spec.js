@@ -141,7 +141,8 @@ test('Airspace Radar renders and animates on a Studio dashboard', async ({ page 
     await page.fill('input[name="username"]', USER);
     await page.fill('input[name="password"]', PASS);
     await page.press('input[name="password"]', 'Enter');
-    await page.waitForURL(/\/(app|launcher|home)/, { timeout: 60000 });
+    // Pathname only: a regex over the whole URL also matches return_to=.
+    await page.waitForURL((u) => /^\/[^/]+\/(app|launcher|home)\b/.test(new URL(u).pathname), { timeout: 60000 });
 
     // Open the dashboard and wait for the viz canvas (in any frame)
     await page.goto(`/en-GB/app/${HOST_APP}/${VIEW}`);

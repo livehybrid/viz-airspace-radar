@@ -59,7 +59,7 @@ function boot({ options = {}, rows = [] } = {}) {
         addOptionsListener: () => {},
         addDataSourcesListener: () => {},
         getOptions: () => options,
-        getDataSources: () => toDataSources(rows),
+        getDataSources: () => (rows === null ? null : toDataSources(rows)),
     };
 
     evaluate();
@@ -203,5 +203,76 @@ describe('animation loop', () => {
         expect(rafQueue.length).toBe(1);
         stepFrame();
         expect(rafQueue.length).toBe(1);
+    });
+});
+
+describe('empty and malformed data', () => {
+    test('rows without usable lat/lon say so instead of showing a quiet scope', () => {
+        const wrong = { hex: 'W1', callsign: 'WRONG1', latitude: 53.9, longitude: -1.5 };
+        const app = boot({ rows: [wrong] });
+        expect(app.texts()).toContain('NO POSITION DATA (lat/lon)');
+        expect(app.texts()).not.toContain('WRONG1');
+    });
+
+    test('valid rows that are all out of range show no status line', () => {
+        const app = boot({ rows: [FAR_NORTH] });
+        expect(app.texts()).toContain('N');
+        expect(app.texts()).not.toContain('NO POSITION DATA (lat/lon)');
+    });
+
+    test('zero rows or nothing delivered: no status line', () => {
+        for (const rows of [[], null]) {
+            const app = boot({ rows });
+            expect(app.texts()).toContain('N'); // the scope itself did draw
+            expect(app.texts().filter((t) => /^NO /.test(t))).toEqual([]);
+        }
+    });
+});
+
+describe('wrong-type and out-of-range options fall back to defaults', () => {
+    test('the string "false" turns a boolean option off, not on', () => {
+        const app = boot({ options: { showLabels: 'false' }, rows: [NEAR_NORTH] });
+        expect(app.texts()).toContain('N');
+        expect(app.texts()).not.toContain('BAW123');
+    });
+
+    test('a non-boolean, non-string value keeps the default', () => {
+        const app = boot({ options: { showAltitude: 0 }, rows: [NEAR_NORTH] });
+        expect(app.texts()).toContain('350FL');
+    });
+
+    test('a centre latitude past the pole falls back instead of mirroring east-west', () => {
+        const app = boot({ options: { centerLat: 200 }, rows: [NEAR_EAST] });
+        const calls = app.callsFor('EZY456');
+        expect(calls.length).toBe(1);
+        expect(calls[0][1]).toBeGreaterThan(window.innerWidth / 2);
+    });
+
+    test('an infinite or negative range falls back to 50 nm', () => {
+        for (const rangeNm of ['Infinity', -5, 'wide']) {
+            const app = boot({ options: { rangeNm }, rows: [NEAR_NORTH] });
+            expect([rangeNm, app.texts()]).toEqual([rangeNm, expect.arrayContaining(['25nm', 'BAW123'])]);
+        }
+    });
+
+    test('a prototype key as colorScheme falls back to green', () => {
+        const app = boot({ options: { colorScheme: 'toString' } });
+        expect(app.root.style.background).toBe('rgb(1, 12, 6)');
+    });
+
+    test('an object homeLabel never draws "[object Object]"', () => {
+        const app = boot({ options: { homeLabel: { a: 1 } } });
+        expect(app.texts()).not.toContain('[object Object]');
+        expect(app.texts()).toContain('Leeds');
+    });
+});
+
+describe('antimeridian', () => {
+    test('an aircraft just across 180 deg is plotted east of a centre at 179.5', () => {
+        const fiji = { hex: 'F1', callsign: 'FJI910', lat: -17.5, lon: -179.8, altitude_ft: 30000, heading: 90, speed_kts: 450 };
+        const app = boot({ options: { centerLat: -17.5, centerLon: 179.5 }, rows: [fiji] });
+        const calls = app.callsFor('FJI910');
+        expect(calls.length).toBe(1);
+        expect(calls[0][1]).toBeGreaterThan(window.innerWidth / 2);
     });
 });
