@@ -19,8 +19,11 @@ const APP = 'viz-airspace-radar';
 const HOST_APP = 'search';
 
 const TABLE = '| table hex, callsign, lat, lon, altitude_ft, heading, speed_kts';
-// 1 nm is one minute of latitude.
-const NM = 1 / 60;
+// 1 nm is one minute of latitude. Positions are computed here and passed to
+// SPL as literals: eval arithmetic keeps the precision of its least precise
+// operand, so 53.8+25/60 comes back as 54.2 (24 nm, not 25).
+const NORTH25_LAT = (53.8 + 25 / 60).toFixed(6);
+const EAST25_LON = (-1.55 + 25 / 60 / Math.cos((53.8 * Math.PI) / 180)).toFixed(6);
 
 function radarDashboard(title, query, options = {}, dsExtra = {}) {
     return {
@@ -48,8 +51,8 @@ function radarDashboard(title, query, options = {}, dsExtra = {}) {
 const VIEWS = {
     // Due north and due east of the default centre (53.8, -1.55), 25 nm out.
     radar_e2e_geometry: radarDashboard('Radar geometry',
-        `| makeresults | eval hex="N1", callsign="NORTH25", lat=53.8+25*${NM}, lon=-1.55, altitude_ft=30000, heading=0, speed_kts=400 ` +
-        `| append [| makeresults | eval hex="E1", callsign="EAST25", lat=53.8, lon=-1.55+25*${NM}/cos(53.8*pi()/180), altitude_ft=20000, heading=90, speed_kts=300] ${TABLE}`),
+        `| makeresults | eval hex="N1", callsign="NORTH25", lat=${NORTH25_LAT}, lon=-1.55, altitude_ft=30000, heading=0, speed_kts=400 ` +
+        `| append [| makeresults | eval hex="E1", callsign="EAST25", lat=53.8, lon=${EAST25_LON}, altitude_ft=20000, heading=90, speed_kts=300] ${TABLE}`),
     // Centre just west of the antimeridian; the aircraft is 0.7 deg east of it.
     radar_e2e_antimeridian: radarDashboard('Radar antimeridian',
         `| makeresults | eval hex="F1", callsign="FJI910", lat=-17.5, lon=-179.8, altitude_ft=30000, heading=90, speed_kts=450 ${TABLE}`,
@@ -63,7 +66,7 @@ const VIEWS = {
     // Every option wrong. Expected: defaults, so the aircraft due east of
     // Leeds is plotted right of centre, labels off ("false"), 50 nm rings.
     radar_e2e_badopts: radarDashboard('Radar bad options',
-        `| makeresults | eval hex="E1", callsign="EAST25", lat=53.8, lon=-1.55+25*${NM}/cos(53.8*pi()/180), altitude_ft=20000, heading=90, speed_kts=300 ${TABLE}`,
+        `| makeresults | eval hex="E1", callsign="EAST25", lat=53.8, lon=${EAST25_LON}, altitude_ft=20000, heading=90, speed_kts=300 ${TABLE}`,
         {
             showLabels: 'false', centerLat: 200, centerLon: 'west', rangeNm: 'Infinity',
             sweepSeconds: -3, colorScheme: 'toString', homeLabel: { a: 1 },
@@ -172,7 +175,6 @@ test('aircraft are plotted at their true bearing and range', async ({ page }) =>
     const { ring, blips } = geometry(fr);
     expect(blips).toHaveLength(2);
     const half = ring.r * 25 / 50;
-    console.log('geometry', JSON.stringify({ ring, blips, w: fr.w, h: fr.h, texts: fr.texts.filter((t) => /25|nm/.test(t.t)) }));
     const north = blips.find((b) => b.y < ring.y - half / 2);
     const east = blips.find((b) => b.x > ring.x + half / 2);
     expect(north && Math.abs(north.x - ring.x)).toBeLessThan(3);
