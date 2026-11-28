@@ -33,7 +33,7 @@ Two layers, both run in CI on every push (none of it ships in the package):
   and palette fallbacks, plus drift guards between `visualizations.conf`,
   `config.json` and the source defaults.
 - **End-to-end (Playwright)** — `npm run e2e`. Boots the **staged package** on
-  a real `splunk/splunk:10.4.0` container (`docker/docker-compose.yml`),
+  a real Splunk container, 10.4 and the newest 10.6 (`docker/docker-compose.yml`),
   creates a Studio dashboard via REST with synthetic aircraft from
   `makeresults`, then asserts in a headless browser that the radar canvas
   paints and the sweep animates — and captures a render screenshot artifact.
