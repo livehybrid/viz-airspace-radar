@@ -28,9 +28,18 @@ concurrency:
   cancel-in-progress: ${{ github.ref != format('refs/heads/{0}', github.event.repository.default_branch) }}
 
 jobs:
+  # The Splunk versions CI tests and Splunkbase lists come from one file in
+  # livehybrid/deploy-splunk-app-action (splunk-versions.json).
+  splunk-versions:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.v.outputs.matrix }}
+    steps:
+      - id: v
+        uses: livehybrid/deploy-splunk-app-action/splunk-versions@v1
+
   package:
-    # ubuntu-24.04 because ubuntu-latest (26.04) has no Python 3.9, which the
-    # add-on build and Splunk 10.1-and-earlier parity need.
+    # ubuntu-24.04 because ubuntu-latest (26.04) has no Python 3.9.
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout code
@@ -43,17 +52,7 @@ jobs:
 
       - name: Determine version
         id: version
-        shell: bash
-        run: |
-          SHORT_COMMIT_HASH=$(git rev-parse --short HEAD)
-          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
-            TAG_VERSION=${GITHUB_REF#refs/tags/v}
-          else
-            TAG_VERSION="1.0.0"
-          fi
-          VERSION_WITH_HASH="${TAG_VERSION}+${SHORT_COMMIT_HASH}"
-          echo "VERSION_WITH_HASH=${VERSION_WITH_HASH}" >> $GITHUB_OUTPUT
-          echo "TAG_VERSION=${TAG_VERSION}" >> $GITHUB_OUTPUT
+        uses: livehybrid/deploy-splunk-app-action/app-version@v1
 
       - name: Setup Node
         uses: actions/setup-node@v7
@@ -102,74 +101,19 @@ jobs:
                 --exclude 'e2e-results' \
                 --exclude '/splunkbase' \
                 ./ stage/viz-airspace-radar/
-          # Normalise permissions — AppInspect rejects 775/664. App dirs 755, files 644.
-          find stage/viz-airspace-radar -type d -exec chmod 755 {} +
-          find stage/viz-airspace-radar -type f -exec chmod 644 {} +
           ls -la stage/viz-airspace-radar/
 
-      - name: Update app version
-        working-directory: stage/viz-airspace-radar
-        shell: bash
-        run: |
-          if [ -f "default/app.conf" ]; then
-            sed -i "s/^version = .*/version = ${{ steps.version.outputs.VERSION_WITH_HASH }}/g" default/app.conf
-          fi
-          if [ -f "app.manifest" ]; then
-            sed -i "s/\"version\": \".*\"/\"version\": \"${{ steps.version.outputs.VERSION_WITH_HASH }}\"/g" app.manifest
-          fi
-          # Every release must change `build` as well as `version` (app.conf.spec:
-          # "Ensures browsers don't use cached copies of old static files").
-          # build = 1 on every release left upgraded users on the old cached JS.
-          # Derived from the version (1.0.8 -> 10008): reproducible, always rises.
-          V="${{ steps.version.outputs.TAG_VERSION }}"
-          IFS=. read -r MAJ MIN PAT <<< "${V%%[-+]*}"
-          if (( 10#$MIN > 99 || 10#${PAT:-0} > 99 )); then
-            echo "::error::version $V does not fit the build scheme"; exit 1
-          fi
-          BUILD=$(( 10#$MAJ * 10000 + 10#$MIN * 100 + 10#${PAT:-0} ))
-          if grep -q '^build *=' default/app.conf; then
-            sed -i "s/^build *=.*/build = ${BUILD}/" default/app.conf
-          else
-            sed -i "/^\[install\]/a build = ${BUILD}" default/app.conf
-          fi
-          grep -q "^build = ${BUILD}$" default/app.conf
-
-      - name: Generate package tarball
-        shell: bash
-        run: |
-          mkdir -p dist
-          cd stage
-          tar -czf ../dist/viz-airspace-radar-${{ steps.version.outputs.VERSION_WITH_HASH }}.tar.gz viz-airspace-radar/
-          cd ..
-          ls -la dist/
-
-      - name: Verify package metadata
-        # Reads the tarball itself, not the stage directory the stamp edited.
-        shell: bash
-        run: |
-          # Expected version from the ref and git, independently of the version step.
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then V="${GITHUB_REF#refs/tags/v}"; else V="1.0.0"; fi
-          export WANT_VERSION="${V}+$(git rev-parse --short HEAD)"
-          python3 - dist/*.tar.gz <<'PY'
-          import configparser, json, os, sys, tarfile
-          want = os.environ["WANT_VERSION"]
-          parts = [int(p) for p in want.split("+")[0].split("-")[0].split(".")]
-          parts += [0] * (3 - len(parts))
-          expected = str(parts[0] * 10000 + parts[1] * 100 + parts[2])
-          with tarfile.open(sys.argv[1]) as tar:
-              raw = tar.extractfile("viz-airspace-radar/default/app.conf").read().decode()
-              manifest = json.load(tar.extractfile("viz-airspace-radar/app.manifest"))
-          conf = configparser.ConfigParser(interpolation=None, strict=False)
-          conf.read_string(raw)
-          got = {"build": conf.get("install", "build", fallback=None),
-                 "launcher.version": conf.get("launcher", "version", fallback=None),
-                 "id.version": conf.get("id", "version", fallback=None),
-                 "app.manifest": manifest["info"]["id"]["version"]}
-          print(got)
-          bad = [k for k, v in got.items() if v != (expected if k == "build" else want)]
-          if bad:
-              sys.exit(f"app.conf in the package is wrong for {want}: {bad} (build should be {expected})")
-          PY
+      - name: Package
+        # Stamps the version and build = MAJ*10000+MIN*100+PATCH (every release
+        # must change build, or browsers keep the old cached JS), normalises
+        # permissions (AppInspect rejects 775/664), checks any bundled certifi,
+        # writes the tarball and verifies the tarball itself against a version
+        # recomputed from the ref and git.
+        uses: livehybrid/deploy-splunk-app-action/app-package@v1
+        with:
+          app-dir: stage/viz-airspace-radar
+          version-with-hash: ${{ steps.version.outputs.VERSION_WITH_HASH }}
+          build: ${{ steps.version.outputs.BUILD }}
 
       - name: Upload package artifact
         uses: actions/upload-artifact@v7
@@ -200,74 +144,60 @@ jobs:
 
   e2e-playwright:
     name: e2e-playwright (real Splunk render)
-    needs: package
+    needs: [package, splunk-versions]
     # Dependabot actors get no secrets/egress guarantees; unit + appinspect still cover them.
     if: github.actor != 'dependabot[bot]'
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        # 10.4.0 is what the viz was built and first released on; 10.6.0 is current.
-        splunk: ["10.4.0", "10.6.0"]
+        # 10.4 (the first Splunk with studio_visualization) and the newest 10.6.
+        splunk: ${{ fromJSON(needs.splunk-versions.outputs.matrix) }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
-      # Splunk refuses searches below 5 GB free in its dispatch dir; the runner
-      # image plus a Splunk image can leave less than that (TA-aws-health,
-      # 26 Nov 2026). Drop preinstalled toolchains this job never uses.
       - name: Free runner disk
-        run: |
-          df -h / | tail -1
-          sudo rm -r -f /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
-          df -h / | tail -1
+        uses: livehybrid/deploy-splunk-app-action/splunk-docker/free-disk@v1
       - name: Download staged app
         uses: actions/download-artifact@v8
         with:
           name: stage-contents
           path: stage-app
-      - name: Make staged app readable by the container splunk user
-        run: chmod -R 755 stage-app
       - name: Start Splunk (wait for health)
-        working-directory: docker
+        # The container's splunk user (another uid) only reads the viz: 755.
+        uses: livehybrid/deploy-splunk-app-action/splunk-docker/start@v1
         env:
           APP_DIR: ${{ github.workspace }}/stage-app
-          SPLUNK_IMAGE_TAG: ${{ matrix.splunk }}
-        run: docker compose up -d --wait --wait-timeout 420
-      - name: Setup Node
-        uses: actions/setup-node@v7
         with:
-          node-version: "20"
-      - name: Install Playwright
-        run: |
-          npm ci
-          npx playwright install --with-deps chromium
+          version: ${{ matrix.splunk }}
+          app-dir: stage-app
+          app-dir-mode: "755"
+          wait-timeout: "420"
       - name: Run e2e render check
+        uses: livehybrid/deploy-splunk-app-action/playwright@v1
         env:
           SPLUNK_WEB_URL: http://localhost:8000
           SPLUNK_MGMT_URL: https://localhost:8089
           SPLUNK_USER: admin
           SPLUNK_PASSWORD: Changeme1!
-        run: npx playwright test
-      - name: Upload render artifacts
-        if: always()
-        uses: actions/upload-artifact@v7
         with:
-          name: e2e-render-${{ matrix.splunk }}
-          path: e2e-results/
-          if-no-files-found: ignore
+          working-directory: .
+          artifact-name: e2e-render-${{ matrix.splunk }}
+          results-path: e2e-results/
       - name: Splunk logs on failure
         if: failure()
-        working-directory: docker
-        run: docker compose logs --tail 200 splunk || true
+        uses: livehybrid/deploy-splunk-app-action/splunk-docker/logs@v1
+        with:
+          container: viz_radar_splunk
+          tail: "200"
       - name: Tear down
         if: always()
-        working-directory: docker
-        run: docker compose down -v || true
+        uses: livehybrid/deploy-splunk-app-action/splunk-docker/teardown@v1
 
   appinspect:
     name: quality-appinspect
     needs: package
-    uses: livehybrid/deploy-splunk-app-action/.github/workflows/appinspect-cli.yml@main
+    uses: livehybrid/deploy-splunk-app-action/.github/workflows/appinspect-cli.yml@v1
     with:
       tags: "cloud,future,private_victoria"
     secrets:
@@ -277,7 +207,7 @@ jobs:
     name: quality-appinspect-api
     needs:
       - appinspect
-    uses: livehybrid/deploy-splunk-app-action/.github/workflows/appinspect-api.yml@main
+    uses: livehybrid/deploy-splunk-app-action/.github/workflows/appinspect-api.yml@v1
     secrets:
       splunkbase_username: ${{ secrets.SPLUNKBASE_USERNAME }}
       splunkbase_password: ${{ secrets.SPLUNKBASE_PASSWORD }}
@@ -289,21 +219,21 @@ jobs:
       - appinspect
       - unit-test
       - e2e-playwright
-    uses: livehybrid/deploy-splunk-app-action/.github/workflows/publish.yml@main
+    uses: livehybrid/deploy-splunk-app-action/.github/workflows/publish.yml@v1
 
   publish-splunkbase:
     # Tag runs only: needs the GitHub release (every CLI gate + e2e) and
     # Splunk's hosted AppInspect. Uploads stay off until the repo variable
-    # SPLUNKBASE_PUBLISH_ENABLED=true.
+    # SPLUNKBASE_PUBLISH_ENABLED=true. The compatibility list is the shared
+    # splunk-versions.json, the same file the e2e matrix uses.
     needs:
       - publish-gh
       - quality-appinspect-api
     permissions:
       contents: read
-    uses: livehybrid/deploy-splunk-app-action/.github/workflows/publish-splunkbase.yml@main
+    uses: livehybrid/deploy-splunk-app-action/.github/workflows/publish-splunkbase.yml@v1
     with:
       app_id: "8813"
-      splunk_versions: "10.6,10.5,10.4"
     secrets:
       splunkbase_username: ${{ secrets.SPLUNKBASE_USERNAME }}
       splunkbase_password: ${{ secrets.SPLUNKBASE_PASSWORD }}

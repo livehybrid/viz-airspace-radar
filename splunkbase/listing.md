@@ -1,7 +1,7 @@
 # Airspace Radar Visualization — Splunkbase listing copy
 
 > Source of truth for the Splunkbase listing fields. Keep in sync with each release.
-> Compatibility: Splunk Enterprise 9.0+ or Splunk Cloud with Dashboard Studio.
+> Compatibility: Splunk Enterprise 10.4+ or Splunk Cloud with Dashboard Studio (tested on 10.4 and the newest 10.6).
 
 ## Short Description (max 380 chars)
 
